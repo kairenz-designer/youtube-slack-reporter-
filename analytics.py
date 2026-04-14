@@ -48,6 +48,72 @@ def _analytics_client():
     return build("youtubeAnalytics", "v2", credentials=_get_credentials())
 
 
+def get_views_at_hour_mark(video_id: str, published_at: str, hours: int) -> int | None:
+    """
+    Return cumulative views a video had at `hours` after publishing.
+    Uses YouTube Analytics API with hour-level granularity.
+    Returns view count or None if unavailable.
+    """
+    try:
+        youtube = _analytics_client()
+        pub = datetime.fromisoformat(published_at.replace("Z", "+00:00")).replace(tzinfo=None)
+        cutoff = pub + timedelta(hours=hours)
+
+        # Query hourly views for the video from publish day up to cutoff day
+        start_date = pub.strftime("%Y-%m-%d")
+        end_date = cutoff.strftime("%Y-%m-%d")
+
+        response = (
+            youtube.reports()
+            .query(
+                ids="channel==MINE",
+                startDate=start_date,
+                endDate=end_date,
+                metrics="views",
+                dimensions="day,hour",
+                filters=f"video=={video_id}",
+            )
+            .execute()
+        )
+
+        rows = response.get("rows", [])
+        if not rows:
+            return None
+
+        # Rows: [date_str, hour_int, views_int]
+        # Sum only rows where datetime(date, hour) <= pub + hours
+        total = 0
+        for row in rows:
+            row_dt = datetime.strptime(row[0], "%Y-%m-%d").replace(hour=int(row[1]))
+            if row_dt <= cutoff:
+                total += int(row[2])
+
+        return total if total > 0 else None
+
+    except Exception as e:
+        print(f"[Analytics] Could not fetch {hours}h views for {video_id}: {e}", file=sys.stderr)
+        return None
+
+
+def backfill_benchmark_from_analytics(videos: list[dict], hours_list: list[int]) -> dict:
+    """
+    Fetch historical views at each hour mark for a list of videos using Analytics API.
+    Returns {video_id: {hours: views}} for successfully fetched data.
+    Used to seed accurate benchmark data from YouTube Studio history.
+    """
+    result = {}
+    for v in videos:
+        video_id = v["video_id"]
+        published_at = v["published_at"]
+        result[video_id] = {}
+        for hours in hours_list:
+            views = get_views_at_hour_mark(video_id, published_at, hours)
+            if views is not None:
+                result[video_id][hours] = views
+                print(f"[Analytics] {video_id} at {hours}h: {views:,} views")
+    return result
+
+
 def get_video_ctr(video_id: str, published_at: str) -> dict | None:
     """
     Return impressionClickThroughRate for a video.
