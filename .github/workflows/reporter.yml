@@ -2,7 +2,7 @@ name: YouTube Reporter Bot
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # Every 10 minutes, 24/7
+    - cron: '*/5 * * * *'    # Every 5 minutes, 24/7
   workflow_dispatch:           # Manual trigger from GitHub UI
 
 jobs:

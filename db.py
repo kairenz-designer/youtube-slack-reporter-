@@ -60,15 +60,18 @@ def add_video(video_id: str, title: str, url: str, thumbnail_url: str, published
 
 
 def schedule_reports(video_id: str, published_at: str):
-    """Schedule 1h, 3h, 6h, 24h reports — only if their time hasn't passed yet."""
+    """Schedule 1h, 3h, 6h, 24h reports.
+    Allow up to 30 minutes grace period so cron delays don't cause missed reports.
+    """
     conn = get_conn()
     c = conn.cursor()
     pub = datetime.fromisoformat(published_at.replace("Z", "+00:00")).replace(tzinfo=None)
     now = datetime.utcnow()
+    grace = timedelta(minutes=30)
 
     for hours in [1, 3, 6, 24]:
         scheduled = pub + timedelta(hours=hours)
-        if scheduled > now:
+        if scheduled > now - grace:  # allow up to 30 min late
             c.execute(
                 "INSERT OR IGNORE INTO reports (video_id, report_hours, scheduled_at) VALUES (?, ?, ?)",
                 (video_id, hours, scheduled.isoformat()),
