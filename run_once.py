@@ -57,8 +57,11 @@ def seed_benchmark_if_empty():
         for v in all_videos:
             pub = datetime.fromisoformat(v["published_at"].replace("Z", "+00:00")).replace(tzinfo=None)
             age_hours = (datetime.utcnow() - pub).total_seconds() / 3600
-            if age_hours < 48:
-                continue  # skip recent videos — let the normal report cycle handle them
+            # Only seed videos older than 7 days — and ONLY for 24h mark.
+            # 1h/3h/6h views of old videos are impossible to recover accurately,
+            # seeding them with current views creates wildly wrong benchmarks.
+            if age_hours < 168:
+                continue
             c.execute(
                 "INSERT OR IGNORE INTO videos (video_id, title, url, thumbnail_url, published_at) VALUES (?,?,?,?,?)",
                 (v["video_id"], v["title"], v["url"], v["thumbnail_url"], v["published_at"])
@@ -66,18 +69,16 @@ def seed_benchmark_if_empty():
             stats = get_video_stats(v["video_id"])
             if not stats:
                 continue
-            for hours in [1, 3, 6, 24]:
-                if age_hours >= hours:
-                    scheduled = pub + timedelta(hours=hours)
-                    c.execute(
-                        """INSERT OR IGNORE INTO reports
-                           (video_id, report_hours, scheduled_at, sent_at, views, likes, comments)
-                           VALUES (?,?,?,?,?,?,?)""",
-                        (v["video_id"], hours, scheduled.isoformat(),
-                         scheduled.isoformat(),
-                         stats["views"], stats["likes"], stats["comments"])
-                    )
-                    seeded += 1
+            scheduled = pub + timedelta(hours=24)
+            c.execute(
+                """INSERT OR IGNORE INTO reports
+                   (video_id, report_hours, scheduled_at, sent_at, views, likes, comments)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (v["video_id"], 24, scheduled.isoformat(),
+                 scheduled.isoformat(),
+                 stats["views"], stats["likes"], stats["comments"])
+            )
+            seeded += 1
         conn.commit()
         conn.close()
         print(f"[Seed] Done — {seeded} entries seeded from {len(all_videos)} videos.")
