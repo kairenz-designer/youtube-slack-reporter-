@@ -48,20 +48,16 @@ def _analytics_client():
     return build("youtubeAnalytics", "v2", credentials=_get_credentials())
 
 
-def get_views_at_hour_mark(video_id: str, published_at: str, hours: int) -> int | None:
+def get_views_first_day(video_id: str, published_at: str) -> int | None:
     """
-    Return cumulative views a video had at `hours` after publishing.
-    Uses YouTube Analytics API with hour-level granularity.
-    Returns view count or None if unavailable.
+    Return total views on the publish day (day-level is max granularity Analytics API supports).
+    Used as approximate 24h benchmark seed.
     """
     try:
         youtube = _analytics_client()
         pub = datetime.fromisoformat(published_at.replace("Z", "+00:00")).replace(tzinfo=None)
-        cutoff = pub + timedelta(hours=hours)
-
-        # Query hourly views for the video from publish day up to cutoff day
         start_date = pub.strftime("%Y-%m-%d")
-        end_date = cutoff.strftime("%Y-%m-%d")
+        end_date = (pub + timedelta(days=1)).strftime("%Y-%m-%d")
 
         response = (
             youtube.reports()
@@ -70,7 +66,7 @@ def get_views_at_hour_mark(video_id: str, published_at: str, hours: int) -> int 
                 startDate=start_date,
                 endDate=end_date,
                 metrics="views",
-                dimensions="day,hour",
+                dimensions="day",
                 filters=f"video=={video_id}",
             )
             .execute()
@@ -80,73 +76,18 @@ def get_views_at_hour_mark(video_id: str, published_at: str, hours: int) -> int 
         if not rows:
             return None
 
-        # Rows: [date_str, hour_int, views_int]
-        # Sum only rows where datetime(date, hour) <= pub + hours
-        total = 0
-        for row in rows:
-            row_dt = datetime.strptime(row[0], "%Y-%m-%d").replace(hour=int(row[1]))
-            if row_dt <= cutoff:
-                total += int(row[2])
-
+        total = sum(int(row[1]) for row in rows)
         return total if total > 0 else None
 
     except Exception as e:
-        print(f"[Analytics] Could not fetch {hours}h views for {video_id}: {e}", file=sys.stderr)
+        print(f"[Analytics] Could not fetch day-1 views for {video_id}: {e}", file=sys.stderr)
         return None
-
-
-def backfill_benchmark_from_analytics(videos: list[dict], hours_list: list[int]) -> dict:
-    """
-    Fetch historical views at each hour mark for a list of videos using Analytics API.
-    Returns {video_id: {hours: views}} for successfully fetched data.
-    Used to seed accurate benchmark data from YouTube Studio history.
-    """
-    result = {}
-    for v in videos:
-        video_id = v["video_id"]
-        published_at = v["published_at"]
-        result[video_id] = {}
-        for hours in hours_list:
-            views = get_views_at_hour_mark(video_id, published_at, hours)
-            if views is not None:
-                result[video_id][hours] = views
-                print(f"[Analytics] {video_id} at {hours}h: {views:,} views")
-    return result
 
 
 def get_video_ctr(video_id: str, published_at: str) -> dict | None:
     """
-    Return impressionClickThroughRate for a video.
-    Returns dict with 'ctr' (percentage, e.g. 6.4) or None if unavailable.
+    CTR (impressionClickThroughRate) is NOT available in the YouTube Analytics
+    API v2 for channel owners — it only exists in YouTube Studio's private API.
+    This function always returns None.
     """
-    try:
-        youtube = _analytics_client()
-
-        pub_date = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-        start_date = pub_date.strftime("%Y-%m-%d")
-        end_date = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
-
-        response = (
-            youtube.reports()
-            .query(
-                ids="channel==MINE",
-                startDate=start_date,
-                endDate=end_date,
-                metrics="impressionClickThroughRate",
-                dimensions="video",
-                filters=f"video=={video_id}",
-            )
-            .execute()
-        )
-
-        rows = response.get("rows", [])
-        if not rows:
-            return None
-
-        # rows[0] = [video_id, ctr_as_ratio]
-        _, ctr_ratio = rows[0]
-        return {"ctr": round(float(ctr_ratio) * 100, 2)}
-
-    except Exception as e:
-        print(f"[Analytics] Could not fetch CTR for {video_id}: {e}", file=sys.stderr)
-        return None
+    return None

@@ -2,7 +2,6 @@ import os
 import sys
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from ai_advisor import get_ai_recommendation
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_CHANNEL   = os.environ["SLACK_CHANNEL"]
@@ -45,8 +44,6 @@ def send_report(
     stats: dict,
     report_hours: int,
     previous_stats: dict | None = None,
-    ctr: float | None = None,
-    previous_ctr: float | None = None,
     benchmark: list[dict] | None = None,
 ):
     label = HOUR_LABELS.get(report_hours, f"{report_hours} gi\u1edd")
@@ -99,19 +96,6 @@ def send_report(
         },
     ]
 
-    # CTR field (append to stats if available)
-    if ctr is not None:
-        ctr_diff = ""
-        if prev.get("ctr") is not None:
-            delta = round(ctr - prev["ctr"], 2)
-            ctr_diff = f" _(+{delta}%)_" if delta > 0 else (f" _({delta}%)_" if delta < 0 else " _(+0%)_")
-        blocks.append({
-            "type": "section",
-            "fields": [
-                {"type": "mrkdwn", "text": f"*CTR*\n{ctr}%{ctr_diff}"},
-            ],
-        })
-
     # Benchmark block
     if avg_views is not None and achievement_rate is not None:
         indicator = _achievement_indicator(achievement_rate)
@@ -139,31 +123,6 @@ def send_report(
                 "type": "mrkdwn",
                 "text": f"\u2139\ufe0f Ch\u01b0a \u0111\u1ee7 d\u1eef li\u1ec7u \u0111\u1ec3 so s\xe1nh ({len(benchmark)}/3 video).",
             }],
-        })
-
-    # AI analysis — always runs regardless of benchmark
-    blocks.append({"type": "divider"})
-    ai_text = get_ai_recommendation(
-        title=video["title"],
-        thumbnail_url=_thumbnail_url(video["video_id"]),
-        stats=stats,
-        report_hours=report_hours,
-        achievement_rate=achievement_rate,
-        avg_views=avg_views,
-    )
-    if ai_text:
-        if achievement_rate is None:
-            header = "\U0001f916 *\u0110\xe1nh gi\xe1 Thumbnail & Ti\xeau \u0111\u1ec1 (AI)*"
-        elif achievement_rate >= THRESHOLD_GREEN:
-            header = "\U0001f916 *Ph\u00e2n t\xedch \u0111i\u1ec3m m\u1ea1nh (AI)*"
-        else:
-            header = "\U0001f916 *\u0110\xe1nh gi\xe1 & Kh\u01b0y\u1ebfn ngh\u1ecb (AI)*"
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"{header}\n{ai_text}",
-            },
         })
 
     blocks.append({
