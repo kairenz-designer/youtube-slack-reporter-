@@ -133,25 +133,28 @@ def send_report(
             ],
         })
 
-        # AI recommendation when below 100%
-        if achievement_rate < THRESHOLD_GREEN:
-            ai_text = get_ai_recommendation(
-                title=video["title"],
-                thumbnail_url=_thumbnail_url(video["video_id"]),
-                stats=stats,
-                report_hours=report_hours,
-                achievement_rate=achievement_rate,
-                avg_views=avg_views,
-            )
-            if ai_text:
-                blocks.append({"type": "divider"})
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"\U0001f916 *\u0110\xe1nh gi\xe1 & Kh\u01b0y\u1ebfn ngh\u1ecb (AI)*\n{ai_text}",
-                    },
-                })
+        # AI analysis — improvement advice below 100%, positive breakdown above 100%
+        ai_text = get_ai_recommendation(
+            title=video["title"],
+            thumbnail_url=_thumbnail_url(video["video_id"]),
+            stats=stats,
+            report_hours=report_hours,
+            achievement_rate=achievement_rate,
+            avg_views=avg_views,
+        )
+        if ai_text:
+            blocks.append({"type": "divider"})
+            if achievement_rate >= THRESHOLD_GREEN:
+                header = "\U0001f916 *Ph\u00e2n t\xedch \u0111i\u1ec3m m\u1ea1nh (AI)*"
+            else:
+                header = "\U0001f916 *\u0110\xe1nh gi\xe1 & Kh\u01b0y\u1ebfn ngh\u1ecb (AI)*"
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"{header}\n{ai_text}",
+                },
+            })
 
     elif benchmark is not None and len(benchmark) < 3:
         blocks.append({
