@@ -11,16 +11,29 @@ def get_ai_recommendation(
     thumbnail_url: str,
     stats: dict,
     report_hours: int,
-    achievement_rate: float,
-    avg_views: int,
+    achievement_rate: float | None = None,
+    avg_views: int | None = None,
 ) -> str | None:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return None
 
-    above_avg = achievement_rate >= 100
+    above_avg = achievement_rate is not None and achievement_rate >= 100
 
-    if above_avg:
+    if achievement_rate is None:
+        # No benchmark yet — just analyze thumbnail + title
+        prompt = (
+            f"Bạn là chuyên gia tối ưu nội dung YouTube.\n\n"
+            f"Video vừa đăng tại mốc {report_hours}h:\n"
+            f"- Tiêu đề: \"{title}\"\n"
+            f"- Lượt xem: {stats['views']:,} | Lượt thích: {stats['likes']:,} | Bình luận: {stats['comments']:,}\n\n"
+            f"Nhìn vào thumbnail và tiêu đề, hãy đưa ra nhận xét và gợi ý CỤ THỂ:\n\n"
+            f"• *Thumbnail:* điểm mạnh + điểm cần cải thiện (nếu có rút text từ \"...\" thành \"...\", "
+            f"đổi màu nền...)\n"
+            f"• *Tiêu đề:* điểm mạnh + nếu cần cải thiện thì đề xuất 1–2 phiên bản thay thế cụ thể\n\n"
+            f"Trả lời bằng tiếng Việt, ngắn gọn, thực chiến."
+        )
+    elif above_avg:
         prompt = (
             f"Bạn là chuyên gia tối ưu nội dung YouTube.\n\n"
             f"Video đang đạt {achievement_rate}% so với trung bình kênh "

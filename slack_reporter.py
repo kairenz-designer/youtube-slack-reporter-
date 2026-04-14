@@ -132,37 +132,38 @@ def send_report(
                 },
             ],
         })
-
-        # AI analysis — improvement advice below 100%, positive breakdown above 100%
-        ai_text = get_ai_recommendation(
-            title=video["title"],
-            thumbnail_url=_thumbnail_url(video["video_id"]),
-            stats=stats,
-            report_hours=report_hours,
-            achievement_rate=achievement_rate,
-            avg_views=avg_views,
-        )
-        if ai_text:
-            blocks.append({"type": "divider"})
-            if achievement_rate >= THRESHOLD_GREEN:
-                header = "\U0001f916 *Ph\u00e2n t\xedch \u0111i\u1ec3m m\u1ea1nh (AI)*"
-            else:
-                header = "\U0001f916 *\u0110\xe1nh gi\xe1 & Kh\u01b0y\u1ebfn ngh\u1ecb (AI)*"
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"{header}\n{ai_text}",
-                },
-            })
-
     elif benchmark is not None and len(benchmark) < 3:
         blocks.append({
             "type": "context",
             "elements": [{
                 "type": "mrkdwn",
-                "text": "\u2139\ufe0f Ch\u01b0a \u0111\u1ee7 d\u1eef li\u1ec7u \u0111\u1ec3 so s\xe1nh. C\u1ea7n \xedt nh\u1ea5t 3 video tr\u01b0\u1edbc \u0111\xf3.",
+                "text": f"\u2139\ufe0f Ch\u01b0a \u0111\u1ee7 d\u1eef li\u1ec7u \u0111\u1ec3 so s\xe1nh ({len(benchmark)}/3 video).",
             }],
+        })
+
+    # AI analysis — always runs regardless of benchmark
+    blocks.append({"type": "divider"})
+    ai_text = get_ai_recommendation(
+        title=video["title"],
+        thumbnail_url=_thumbnail_url(video["video_id"]),
+        stats=stats,
+        report_hours=report_hours,
+        achievement_rate=achievement_rate,
+        avg_views=avg_views,
+    )
+    if ai_text:
+        if achievement_rate is None:
+            header = "\U0001f916 *\u0110\xe1nh gi\xe1 Thumbnail & Ti\xeau \u0111\u1ec1 (AI)*"
+        elif achievement_rate >= THRESHOLD_GREEN:
+            header = "\U0001f916 *Ph\u00e2n t\xedch \u0111i\u1ec3m m\u1ea1nh (AI)*"
+        else:
+            header = "\U0001f916 *\u0110\xe1nh gi\xe1 & Kh\u01b0y\u1ebfn ngh\u1ecb (AI)*"
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"{header}\n{ai_text}",
+            },
         })
 
     blocks.append({
