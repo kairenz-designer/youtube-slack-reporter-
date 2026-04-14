@@ -39,7 +39,8 @@ try:
         if not is_video_known(video["video_id"]):
             print(f"[New] {video['title']}")
             add_video(video["video_id"], video["title"], video["url"], video["thumbnail_url"], video["published_at"])
-            schedule_reports(video["video_id"], video["published_at"])
+        # Always re-check scheduling — catches missed slots if cron was delayed
+        schedule_reports(video["video_id"], video["published_at"])
 except Exception as e:
     print(f"[Error] fetch videos: {e}")
 
