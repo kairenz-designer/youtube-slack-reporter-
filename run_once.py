@@ -57,6 +57,8 @@ def seed_benchmark_if_empty():
         for v in all_videos:
             pub = datetime.fromisoformat(v["published_at"].replace("Z", "+00:00")).replace(tzinfo=None)
             age_hours = (datetime.utcnow() - pub).total_seconds() / 3600
+            if age_hours < 48:
+                continue  # skip recent videos — let the normal report cycle handle them
             c.execute(
                 "INSERT OR IGNORE INTO videos (video_id, title, url, thumbnail_url, published_at) VALUES (?,?,?,?,?)",
                 (v["video_id"], v["title"], v["url"], v["thumbnail_url"], v["published_at"])
