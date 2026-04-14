@@ -22,7 +22,7 @@ def get_ai_recommendation(
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model="claude-opus-4-6",
-            max_tokens=350,
+            max_tokens=600,
             messages=[{
                 "role": "user",
                 "content": [
@@ -36,13 +36,16 @@ def get_ai_recommendation(
                             f"Bạn là chuyên gia tối ưu nội dung YouTube.\n\n"
                             f"Video đang đạt {achievement_rate}% so với trung bình kênh "
                             f"tại mốc {report_hours}h sau khi đăng.\n"
-                            f"- Tiêu đề: \"{title}\"\n"
+                            f"- Tiêu đề hiện tại: \"{title}\"\n"
                             f"- Lượt xem: {stats['views']:,} | Trung bình kênh: {avg_views:,}\n"
                             f"- Lượt thích: {stats['likes']:,} | Bình luận: {stats['comments']:,}\n\n"
-                            f"Nhìn vào thumbnail trên và tiêu đề, hãy đánh giá ngắn gọn và "
-                            f"đưa ra khuyến nghị cụ thể (dưới 80 từ):\n"
-                            f"• *Thumbnail:* điểm chưa tốt + gợi ý cải thiện\n"
-                            f"• *Tiêu đề:* điểm chưa tốt + gợi ý cải thiện"
+                            f"Nhìn vào thumbnail và tiêu đề, hãy đưa ra gợi ý SỬA CỤ THỂ — "
+                            f"không chỉ nói \"nên sửa\" mà phải đưa ra phương án thay thế thực tế:\n\n"
+                            f"• *Thumbnail:* chỉ ra vấn đề cụ thể (ví dụ: text quá dài, màu tối, thiếu mặt người...) "
+                            f"rồi gợi ý chỉnh sửa rõ ràng (ví dụ: rút text từ \"...\" thành \"...\", "
+                            f"đổi màu nền sang..., thêm yếu tố...)\n"
+                            f"• *Tiêu đề:* chỉ ra vấn đề rồi đề xuất 1–2 phiên bản tiêu đề thay thế cụ thể\n\n"
+                            f"Trả lời bằng tiếng Việt, ngắn gọn, thực chiến."
                         ),
                     },
                 ],
