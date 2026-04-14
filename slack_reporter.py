@@ -2,6 +2,7 @@ import os
 import sys
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from ai_advisor import get_ai_recommendation
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_CHANNEL   = os.environ["SLACK_CHANNEL"]
@@ -132,26 +133,25 @@ def send_report(
             ],
         })
 
-        # Recommendation if below threshold
-        if achievement_rate < THRESHOLD_YELLOW:
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        "\U0001f4a1 *L\u01b0\u1ee3t xem hi\u1ec7n t\u1ea1i th\u1ea5p h\u01a1n trung b\xecnh k\xeanh.*\n"
-                        "H\xe3y c\xe2n nh\u1eafc thay \u0111\u1ed5i *thumbnail* ho\u1eb7c *ti\xeau \u0111\u1ec1* \u0111\u1ec3 c\u1ea3i thi\u1ec7n hi\u1ec7u su\u1ea5t."
-                    ),
-                },
-            })
-        elif achievement_rate < THRESHOLD_GREEN:
-            blocks.append({
-                "type": "context",
-                "elements": [{
-                    "type": "mrkdwn",
-                    "text": "\U0001f4a1 \u0110ang ti\u1ebfp c\u1eadn trung b\xecnh k\xeanh. Ti\u1ebfp t\u1ee5c theo d\xf5i!",
-                }],
-            })
+        # AI recommendation when below 100%
+        if achievement_rate < THRESHOLD_GREEN:
+            ai_text = get_ai_recommendation(
+                title=video["title"],
+                thumbnail_url=_thumbnail_url(video["video_id"]),
+                stats=stats,
+                report_hours=report_hours,
+                achievement_rate=achievement_rate,
+                avg_views=avg_views,
+            )
+            if ai_text:
+                blocks.append({"type": "divider"})
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"\U0001f916 *\u0110\xe1nh gi\xe1 & Kh\u01b0y\u1ebfn ngh\u1ecb (AI)*\n{ai_text}",
+                    },
+                })
 
     elif benchmark is not None and len(benchmark) < 3:
         blocks.append({
