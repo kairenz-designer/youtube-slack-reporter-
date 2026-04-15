@@ -2,7 +2,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "state.db"
+DB_PATH = Path(__file__).parent / "views_data.db"
 
 
 def get_conn():
