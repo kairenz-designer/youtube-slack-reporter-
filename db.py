@@ -60,7 +60,7 @@ def add_video(video_id: str, title: str, url: str, thumbnail_url: str, published
 
 
 def schedule_reports(video_id: str, published_at: str):
-    """Schedule 1h, 3h, 6h, 24h reports.
+    """Schedule 1h, 2h, 3h, 8h, 12h, 24h, 72h (3 days), 168h (1 week) reports.
     Allow up to 30 minutes grace period so cron delays don't cause missed reports.
     """
     conn = get_conn()
@@ -69,7 +69,7 @@ def schedule_reports(video_id: str, published_at: str):
     now = datetime.utcnow()
     grace = timedelta(minutes=30)
 
-    for hours in [1, 3, 6, 24]:
+    for hours in [1, 2, 3, 8, 12, 24, 72, 168]:
         scheduled = pub + timedelta(hours=hours)
         if scheduled > now - grace:  # allow up to 30 min late
             c.execute(
