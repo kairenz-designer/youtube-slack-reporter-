@@ -8,7 +8,7 @@ SLACK_CHANNEL   = os.environ["SLACK_CHANNEL"]
 
 _client = WebClient(token=SLACK_BOT_TOKEN)
 
-HOUR_LABELS = {1: "1 gi\u1edd", 2: "2 gi\u1edd", 3: "3 gi\u1edd", 8: "8 gi\u1edd", 12: "12 gi\u1edd", 24: "24 gi\u1edd", 72: "3 ng\xe0y", 168: "1 tu\u1ea7n"}
+HOUR_LABELS = {0.5: "30 ph\xfat", 1: "1 gi\u1edd", 2: "2 gi\u1edd", 3: "3 gi\u1edd", 8: "8 gi\u1edd", 12: "12 gi\u1edd", 24: "24 gi\u1edd", 72: "3 ng\xe0y", 168: "1 tu\u1ea7n"}
 
 # Achievement rate thresholds
 THRESHOLD_GREEN  = 100   # >= 100% → 🟢
