@@ -4,6 +4,8 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "views_data.db"
 
+REPORT_HOURS = [1, 3, 6, 24]
+
 
 def get_conn():
     return sqlite3.connect(DB_PATH)
@@ -25,8 +27,9 @@ def init_db():
         CREATE TABLE IF NOT EXISTS reports (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             video_id      TEXT,
-            report_hours  INTEGER,
+            report_hours  REAL,
             scheduled_at  TEXT,
+            stats_at      TEXT,
             sent_at       TEXT,
             views         INTEGER,
             likes         INTEGER,
@@ -35,6 +38,15 @@ def init_db():
             UNIQUE(video_id, report_hours)
         )
     """)
+    # Migration: add stats_at for existing DBs that don't have it yet
+    try:
+        c.execute("ALTER TABLE reports ADD COLUMN stats_at TEXT")
+    except Exception:
+        pass
+    # Backfill: old records where stats were saved alongside Slack send
+    c.execute(
+        "UPDATE reports SET stats_at = sent_at WHERE sent_at IS NOT NULL AND stats_at IS NULL"
+    )
     conn.commit()
     conn.close()
 
@@ -59,9 +71,6 @@ def add_video(video_id: str, title: str, url: str, thumbnail_url: str, published
     conn.close()
 
 
-REPORT_HOURS = [1, 3, 6, 24]
-
-
 def schedule_reports(video_id: str, published_at: str):
     """Schedule reports at 1h, 3h, 6h, 24h after publish.
     Allow up to 30 minutes grace period so cron delays don't cause missed reports.
@@ -74,7 +83,7 @@ def schedule_reports(video_id: str, published_at: str):
 
     for hours in REPORT_HOURS:
         scheduled = pub + timedelta(hours=hours)
-        if scheduled > now - grace:  # allow up to 30 min late
+        if scheduled > now - grace:
             c.execute(
                 "INSERT OR IGNORE INTO reports (video_id, report_hours, scheduled_at) VALUES (?, ?, ?)",
                 (video_id, hours, scheduled.isoformat()),
@@ -83,41 +92,10 @@ def schedule_reports(video_id: str, published_at: str):
     conn.close()
 
 
-def force_reschedule_latest(hours: list) -> str | None:
-    """Reset (or insert) reports for the most recently published video at given hours.
-    Clears sent_at so the reports fire again on the next run.
-    Returns the video_id that was reset, or None if no video found.
-    """
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT video_id, published_at FROM videos ORDER BY published_at DESC LIMIT 1")
-    row = c.fetchone()
-    if not row:
-        conn.close()
-        return None
-    video_id, published_at = row
-    pub = datetime.fromisoformat(published_at.replace("Z", "+00:00")).replace(tzinfo=None)
-    now = datetime.utcnow()
+# ── Phase 1: collect stats ───────────────────────────────────────────────────
 
-    for h in hours:
-        scheduled = pub + timedelta(hours=h)
-        due_at = min(scheduled, now - timedelta(minutes=1))  # past → immediately due
-        c.execute(
-            "UPDATE reports SET sent_at=NULL, scheduled_at=? WHERE video_id=? AND report_hours=?",
-            (due_at.isoformat(), video_id, h),
-        )
-        if c.rowcount == 0:
-            c.execute(
-                "INSERT INTO reports (video_id, report_hours, scheduled_at) VALUES (?,?,?)",
-                (video_id, h, due_at.isoformat()),
-            )
-    conn.commit()
-    conn.close()
-    return video_id
-
-
-def get_pending_reports() -> list[dict]:
-    """Return reports whose scheduled time has passed but haven't been sent yet."""
+def get_reports_needing_stats() -> list[dict]:
+    """Reports whose scheduled time has passed but stats haven't been fetched yet."""
     conn = get_conn()
     c = conn.cursor()
     now = datetime.utcnow().isoformat()
@@ -126,7 +104,7 @@ def get_pending_reports() -> list[dict]:
         SELECT r.id, r.video_id, r.report_hours, v.title, v.url, v.thumbnail_url, v.published_at
         FROM reports r
         JOIN videos v ON r.video_id = v.video_id
-        WHERE r.sent_at IS NULL AND r.scheduled_at <= ?
+        WHERE r.scheduled_at <= ? AND r.stats_at IS NULL
         ORDER BY r.scheduled_at
         """,
         (now,),
@@ -135,37 +113,74 @@ def get_pending_reports() -> list[dict]:
     conn.close()
     return [
         {
-            "id": r[0],
-            "video_id": r[1],
-            "report_hours": r[2],
-            "title": r[3],
-            "url": r[4],
-            "thumbnail_url": r[5],
-            "published_at": r[6],
+            "id": r[0], "video_id": r[1], "report_hours": r[2],
+            "title": r[3], "url": r[4], "thumbnail_url": r[5], "published_at": r[6],
         }
         for r in rows
     ]
 
 
-def mark_report_sent(report_id: int, views: int, likes: int, comments: int, ctr: float | None = None):
+def save_stats(report_id: int, views: int, likes: int, comments: int):
+    """Store YouTube stats for a report mark. Called as soon as data is fetched."""
     conn = get_conn()
     c = conn.cursor()
     c.execute(
-        "UPDATE reports SET sent_at = ?, views = ?, likes = ?, comments = ?, ctr = ? WHERE id = ?",
-        (datetime.utcnow().isoformat(), views, likes, comments, ctr, report_id),
+        "UPDATE reports SET stats_at=?, views=?, likes=?, comments=? WHERE id=?",
+        (datetime.utcnow().isoformat(), views, likes, comments, report_id),
     )
     conn.commit()
     conn.close()
 
 
-def get_previous_report_stats(video_id: str, report_hours: int) -> dict | None:
-    """Return stats from the most recent report sent before this one."""
+# ── Phase 2: send Slack ──────────────────────────────────────────────────────
+
+def get_reports_ready_to_send() -> list[dict]:
+    """Reports with stats collected but Slack not sent yet."""
     conn = get_conn()
     c = conn.cursor()
     c.execute(
         """
-        SELECT views, likes, comments, ctr FROM reports
-        WHERE video_id = ? AND report_hours < ? AND sent_at IS NOT NULL
+        SELECT r.id, r.video_id, r.report_hours, r.views, r.likes, r.comments,
+               v.title, v.url, v.thumbnail_url, v.published_at
+        FROM reports r
+        JOIN videos v ON r.video_id = v.video_id
+        WHERE r.stats_at IS NOT NULL AND r.sent_at IS NULL
+        ORDER BY r.scheduled_at
+        """,
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0], "video_id": r[1], "report_hours": r[2],
+            "views": r[3], "likes": r[4], "comments": r[5],
+            "title": r[6], "url": r[7], "thumbnail_url": r[8], "published_at": r[9],
+        }
+        for r in rows
+    ]
+
+
+def mark_slack_sent(report_id: int):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE reports SET sent_at=? WHERE id=?",
+        (datetime.utcnow().isoformat(), report_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def get_previous_report_stats(video_id: str, report_hours: float) -> dict | None:
+    """Return stats from the most recent earlier mark that already has data."""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT views, likes, comments FROM reports
+        WHERE video_id = ? AND report_hours < ? AND stats_at IS NOT NULL
         ORDER BY report_hours DESC LIMIT 1
         """,
         (video_id, report_hours),
@@ -173,16 +188,12 @@ def get_previous_report_stats(video_id: str, report_hours: int) -> dict | None:
     row = c.fetchone()
     conn.close()
     if row:
-        return {"views": row[0], "likes": row[1], "comments": row[2], "ctr": row[3]}
+        return {"views": row[0], "likes": row[1], "comments": row[2]}
     return None
 
 
-def get_benchmark_stats(current_video_id: str, report_hours: int, limit: int = 10) -> list[dict]:
-    """
-    Return stats of the last `limit` OTHER videos at the same report_hours.
-    Used to rank the current video against recent channel history.
-    Only includes videos that have actually had their report sent (data exists).
-    """
+def get_benchmark_stats(current_video_id: str, report_hours: float, limit: int = 10) -> list[dict]:
+    """Stats of the last `limit` OTHER videos at the same time mark (data collected)."""
     conn = get_conn()
     c = conn.cursor()
     c.execute(
@@ -191,7 +202,7 @@ def get_benchmark_stats(current_video_id: str, report_hours: int, limit: int = 1
         FROM reports r
         JOIN videos v ON r.video_id = v.video_id
         WHERE r.report_hours = ?
-          AND r.sent_at IS NOT NULL
+          AND r.stats_at IS NOT NULL
           AND r.views IS NOT NULL
           AND r.video_id != ?
         ORDER BY v.published_at DESC

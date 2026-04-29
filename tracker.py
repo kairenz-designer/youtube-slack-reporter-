@@ -145,32 +145,30 @@ def get_views_first_day(video_id: str, published_at: str) -> int | None:
 
 from db import (
     init_db, is_video_known, add_video, schedule_reports,
-    get_pending_reports, mark_report_sent,
+    get_reports_needing_stats, save_stats,
+    get_reports_ready_to_send, mark_slack_sent,
     get_previous_report_stats, get_benchmark_stats,
-    force_reschedule_latest, REPORT_HOURS,
+    REPORT_HOURS,
 )
 from slack_notify import send_report
 
-LOOKBACK_HOURS = 168  # look back 1 week so new videos are always caught
+LOOKBACK_HOURS = 168
 
 init_db()
 
+# ── Seed benchmark data (one-time) ──────────────────────────────────────────
 
-def seed_3h_benchmark_if_empty():
-    """
-    One-time seed of 3h benchmark from YouTube Studio screenshot (2026-04-14).
-    Runs only if fewer than 3 historical 3h entries exist.
-    """
+def seed_benchmark_if_empty():
+    """Seed historical 3h data from YouTube Studio so benchmark works on day one."""
     import sqlite3
     from db import DB_PATH
     conn = sqlite3.connect(DB_PATH)
-    c    = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM reports WHERE report_hours = 3 AND sent_at IS NOT NULL")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM reports WHERE report_hours = 3 AND stats_at IS NOT NULL")
     if c.fetchone()[0] >= 3:
         conn.close()
         return
-
-    print("[Seed3h] Seeding 3h benchmark from YouTube Studio data...")
+    print("[Seed] Seeding 3h benchmark data...")
     studio_data = [
         ("J6Kc8Y3umwI", "2026-04-07T04:03:48", 1800),
         ("0wxJFK_PYJ8", "2026-03-30T03:31:15",  977),
@@ -182,25 +180,24 @@ def seed_3h_benchmark_if_empty():
         ("giE9o1ZxrnQ", "2026-03-26T04:12:22",   73),
         ("bANMLnTtHus", "2026-03-25T09:50:34",   55),
     ]
-    seeded = 0
+    ts = datetime.utcnow().isoformat()
     for vid, pub_str, views_3h in studio_data:
-        pub       = datetime.fromisoformat(pub_str)
+        pub = datetime.fromisoformat(pub_str)
         scheduled = (pub + timedelta(hours=3)).isoformat()
         c.execute(
             "INSERT OR IGNORE INTO reports "
-            "(video_id, report_hours, scheduled_at, sent_at, views, likes, comments) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (vid, 3, scheduled, scheduled, views_3h, 0, 0),
+            "(video_id, report_hours, scheduled_at, stats_at, sent_at, views, likes, comments) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (vid, 3, scheduled, ts, ts, views_3h, 0, 0),
         )
-        seeded += 1
     conn.commit()
     conn.close()
-    print(f"[Seed3h] Done — {seeded} entries seeded.")
+    print("[Seed] Done.")
 
+seed_benchmark_if_empty()
 
-seed_3h_benchmark_if_empty()
+# ── Poll for new videos ──────────────────────────────────────────────────────
 
-# Poll for new videos
 published_after = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
 try:
     videos = get_recent_videos(published_after)
@@ -213,20 +210,26 @@ try:
 except Exception as e:
     print(f"[Error] fetch videos: {e}")
 
-# Force-resend for the truly latest video (runs after polling so DB is up to date)
-if os.environ.get("RESEND_LATEST", "").lower() in ("1", "true", "yes"):
-    vid = force_reschedule_latest(REPORT_HOURS)
-    print(f"[Resend] Reset {REPORT_HOURS}h reports for {vid}")
+# ── Phase 1: Collect stats at each due mark (always, regardless of Slack) ───
 
-# Send pending reports
-pending = get_pending_reports()
-print(f"[Reports] {len(pending)} due")
-
-for report in pending:
+due = get_reports_needing_stats()
+print(f"[Stats] {len(due)} marks due for collection")
+for report in due:
     try:
         stats = get_video_stats(report["video_id"])
-        if not stats:
-            continue
+        if stats:
+            save_stats(report["id"], stats["views"], stats["likes"], stats["comments"])
+            print(f"[Stats] {report['report_hours']}h saved: {report['video_id']}")
+    except Exception as e:
+        print(f"[Error] stats {report['video_id']}: {e}")
+
+# ── Phase 2: Send Slack report using stored stats ────────────────────────────
+
+to_send = get_reports_ready_to_send()
+print(f"[Reports] {len(to_send)} ready to send")
+for report in to_send:
+    try:
+        stats = {"views": report["views"], "likes": report["likes"], "comments": report["comments"]}
         previous_stats = get_previous_report_stats(report["video_id"], report["report_hours"])
         benchmark      = get_benchmark_stats(report["video_id"], report["report_hours"], limit=10)
         video = {
@@ -236,8 +239,8 @@ for report in pending:
             "thumbnail_url": report["thumbnail_url"],
         }
         send_report(video, stats, report["report_hours"], previous_stats, benchmark)
-        mark_report_sent(report["id"], stats["views"], stats["likes"], stats["comments"])
+        mark_slack_sent(report["id"])
     except Exception as e:
-        print(f"[Error] report {report['video_id']}: {e}")
+        print(f"[Error] send {report['video_id']}: {e}")
 
 print("[Done]")
