@@ -147,12 +147,17 @@ from db import (
     init_db, is_video_known, add_video, schedule_reports,
     get_pending_reports, mark_report_sent,
     get_previous_report_stats, get_benchmark_stats,
+    force_reschedule_latest, REPORT_HOURS,
 )
 from slack_notify import send_report
 
-LOOKBACK_HOURS = 24
+LOOKBACK_HOURS = 168  # look back 1 week so new videos are always caught
 
 init_db()
+
+if os.environ.get("RESEND_LATEST", "").lower() in ("1", "true", "yes"):
+    vid = force_reschedule_latest(REPORT_HOURS)
+    print(f"[Resend] Reset {REPORT_HOURS}h reports for {vid}")
 
 
 def seed_3h_benchmark_if_empty():

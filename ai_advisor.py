@@ -14,10 +14,7 @@ _SYSTEM = (
     "Trả lời trong 1–2 câu, không dùng emoji, không lặp lại số liệu đã có."
 )
 
-_HOUR_LABEL = {
-    0.5: "30 phút", 1: "1 giờ", 2: "2 giờ", 3: "3 giờ",
-    8: "8 giờ", 12: "12 giờ", 24: "24 giờ", 72: "3 ngày", 168: "1 tuần",
-}
+_HOUR_LABEL = {1: "1 giờ", 3: "3 giờ", 6: "6 giờ", 24: "24 giờ"}
 
 
 def _client_or_none() -> anthropic.Anthropic | None:

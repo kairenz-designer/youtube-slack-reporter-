@@ -59,8 +59,11 @@ def add_video(video_id: str, title: str, url: str, thumbnail_url: str, published
     conn.close()
 
 
+REPORT_HOURS = [1, 3, 6, 24]
+
+
 def schedule_reports(video_id: str, published_at: str):
-    """Schedule 30min, 1h, 2h, 3h, 8h, 12h, 24h, 72h (3 days), 168h (1 week) reports.
+    """Schedule reports at 1h, 3h, 6h, 24h after publish.
     Allow up to 30 minutes grace period so cron delays don't cause missed reports.
     """
     conn = get_conn()
@@ -69,7 +72,7 @@ def schedule_reports(video_id: str, published_at: str):
     now = datetime.utcnow()
     grace = timedelta(minutes=30)
 
-    for hours in [0.5, 1, 2, 3, 8, 12, 24, 72, 168]:
+    for hours in REPORT_HOURS:
         scheduled = pub + timedelta(hours=hours)
         if scheduled > now - grace:  # allow up to 30 min late
             c.execute(
@@ -78,6 +81,39 @@ def schedule_reports(video_id: str, published_at: str):
             )
     conn.commit()
     conn.close()
+
+
+def force_reschedule_latest(hours: list) -> str | None:
+    """Reset (or insert) reports for the most recently published video at given hours.
+    Clears sent_at so the reports fire again on the next run.
+    Returns the video_id that was reset, or None if no video found.
+    """
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT video_id, published_at FROM videos ORDER BY published_at DESC LIMIT 1")
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None
+    video_id, published_at = row
+    pub = datetime.fromisoformat(published_at.replace("Z", "+00:00")).replace(tzinfo=None)
+    now = datetime.utcnow()
+
+    for h in hours:
+        scheduled = pub + timedelta(hours=h)
+        due_at = min(scheduled, now - timedelta(minutes=1))  # past → immediately due
+        c.execute(
+            "UPDATE reports SET sent_at=NULL, scheduled_at=? WHERE video_id=? AND report_hours=?",
+            (due_at.isoformat(), video_id, h),
+        )
+        if c.rowcount == 0:
+            c.execute(
+                "INSERT INTO reports (video_id, report_hours, scheduled_at) VALUES (?,?,?)",
+                (video_id, h, due_at.isoformat()),
+            )
+    conn.commit()
+    conn.close()
+    return video_id
 
 
 def get_pending_reports() -> list[dict]:
