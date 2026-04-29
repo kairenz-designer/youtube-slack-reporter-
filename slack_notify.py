@@ -2,6 +2,7 @@ import os
 import sys
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from ai_advisor import get_ai_tip
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_CHANNEL   = os.environ["SLACK_CHANNEL"]
@@ -125,17 +126,32 @@ def send_report(
             }],
         })
 
-    # Simple recommendation based on achievement rate
-    if achievement_rate is not None:
+    # AI-powered tip (falls back to static tip if API unavailable)
+    ai_tip = get_ai_tip(
+        title=video["title"],
+        report_hours=report_hours,
+        views=stats["views"],
+        likes=stats["likes"],
+        comments=stats["comments"],
+        achievement_rate=achievement_rate,
+        avg_views=avg_views,
+        prev_views=prev.get("views") if prev else None,
+    )
+    if ai_tip:
+        tip_text = f"\U0001f4a1 {ai_tip}"
+    elif achievement_rate is not None:
         if achievement_rate >= THRESHOLD_GREEN:
-            tip = "\U0001f4a1 Video \u0111ang hi\u1ec7u su\u1ea5t t\u1ed1t! Ti\u1ebfp t\u1ee5c duy tr\xec thumbnail v\xe0 ti\xeau \u0111\u1ec1 theo h\u01b0\u1edbng n\xe0y."
+            tip_text = "\U0001f4a1 Video \u0111ang hi\u1ec7u su\u1ea5t t\u1ed1t! Ti\u1ebfp t\u1ee5c duy tr\xec thumbnail v\xe0 ti\xeau \u0111\u1ec1 theo h\u01b0\u1edbng n\xe0y."
         elif achievement_rate >= THRESHOLD_YELLOW:
-            tip = "\U0001f4a1 Hi\u1ec7u su\u1ea5t \u1edf m\u1ee9c trung b\xecnh. Theo d\xf5i th\xeam \u1edf m\u1ed1c ti\u1ebfp theo."
+            tip_text = "\U0001f4a1 Hi\u1ec7u su\u1ea5t \u1edf m\u1ee9c trung b\xecnh. Theo d\xf5i th\xeam \u1edf m\u1ed1c ti\u1ebfp theo."
         else:
-            tip = "\U0001f4a1 L\u01b0\u1ee3t xem \u0111ang th\u1ea5p h\u01a1n trung b\xecnh k\xeanh. H\xe3y xem x\xe9t thay \u0111\u1ed5i thumbnail ho\u1eb7c ti\xeau \u0111\u1ec1."
+            tip_text = "\U0001f4a1 L\u01b0\u1ee3t xem \u0111ang th\u1ea5p h\u01a1n trung b\xecnh k\xeanh. H\xe3y xem x\xe9t thay \u0111\u1ed5i thumbnail ho\u1eb7c ti\xeau \u0111\u1ec1."
+    else:
+        tip_text = None
+    if tip_text:
         blocks.append({
             "type": "context",
-            "elements": [{"type": "mrkdwn", "text": tip}],
+            "elements": [{"type": "mrkdwn", "text": tip_text}],
         })
 
     blocks.append({
