@@ -33,12 +33,12 @@ def _recent_videos() -> list[dict]:
     c = conn.cursor()
     cutoff = (datetime.utcnow() - timedelta(days=_MONITOR_DAYS)).isoformat()
     c.execute(
-        "SELECT video_id, title, url FROM videos WHERE published_at >= ? ORDER BY published_at DESC",
+        "SELECT video_id, title, url, thumbnail_url FROM videos WHERE published_at >= ? ORDER BY published_at DESC",
         (cutoff,),
     )
     rows = c.fetchall()
     conn.close()
-    return [{"video_id": r[0], "title": r[1], "url": r[2]} for r in rows]
+    return [{"video_id": r[0], "title": r[1], "url": r[2], "thumbnail_url": r[3]} for r in rows]
 
 
 def _seen_ids(video_id: str) -> set:
@@ -94,10 +94,19 @@ def _send_slack(video: dict, comments: list[dict]):
 
     blocks = [
         {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"💬 {n} bình luận mới", "emoji": True},
+        },
+        {
+            "type": "image",
+            "image_url": video["thumbnail_url"],
+            "alt_text": video["title"],
+        },
+        {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"💬 *{n} bình luận mới* — <{video['url']}|{video['title']}>",
+                "text": f"*<{video['url']}|{video['title']}>*",
             },
         },
         {"type": "divider"},
