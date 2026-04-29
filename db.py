@@ -38,12 +38,24 @@ def init_db():
             UNIQUE(video_id, report_hours)
         )
     """)
-# Migration: add stats_at for existing DBs that don't have it yet
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS view_snapshots (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id    TEXT,
+            views       INTEGER,
+            captured_at TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS metadata (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
     try:
         c.execute("ALTER TABLE reports ADD COLUMN stats_at TEXT")
     except Exception:
         pass
-    # Backfill: old records where stats were saved alongside Slack send
     c.execute(
         "UPDATE reports SET stats_at = sent_at WHERE sent_at IS NOT NULL AND stats_at IS NULL"
     )
@@ -72,15 +84,11 @@ def add_video(video_id: str, title: str, url: str, thumbnail_url: str, published
 
 
 def schedule_reports(video_id: str, published_at: str):
-    """Schedule reports at 1h, 3h, 6h, 24h after publish.
-    Allow up to 30 minutes grace period so cron delays don't cause missed reports.
-    """
     conn = get_conn()
     c = conn.cursor()
     pub = datetime.fromisoformat(published_at.replace("Z", "+00:00")).replace(tzinfo=None)
     now = datetime.utcnow()
     grace = timedelta(minutes=30)
-
     for hours in REPORT_HOURS:
         scheduled = pub + timedelta(hours=hours)
         if scheduled > now - grace:
@@ -95,7 +103,6 @@ def schedule_reports(video_id: str, published_at: str):
 # ── Phase 1: collect stats ───────────────────────────────────────────────────
 
 def get_reports_needing_stats() -> list[dict]:
-    """Reports whose scheduled time has passed but stats haven't been fetched yet."""
     conn = get_conn()
     c = conn.cursor()
     now = datetime.utcnow().isoformat()
@@ -121,7 +128,6 @@ def get_reports_needing_stats() -> list[dict]:
 
 
 def save_stats(report_id: int, views: int, likes: int, comments: int):
-    """Store YouTube stats for a report mark. Called as soon as data is fetched."""
     conn = get_conn()
     c = conn.cursor()
     c.execute(
@@ -135,7 +141,6 @@ def save_stats(report_id: int, views: int, likes: int, comments: int):
 # ── Phase 2: send Slack ──────────────────────────────────────────────────────
 
 def get_reports_ready_to_send() -> list[dict]:
-    """Reports with stats collected but Slack not sent yet."""
     conn = get_conn()
     c = conn.cursor()
     c.execute(
@@ -163,10 +168,148 @@ def get_reports_ready_to_send() -> list[dict]:
 def mark_slack_sent(report_id: int):
     conn = get_conn()
     c = conn.cursor()
+    c.execute("UPDATE reports SET sent_at=? WHERE id=?", (datetime.utcnow().isoformat(), report_id))
+    conn.commit()
+    conn.close()
+
+
+# ── Snapshots (view velocity tracking) ──────────────────────────────────────
+
+def save_snapshot(video_id: str, views: int):
+    conn = get_conn()
+    c = conn.cursor()
     c.execute(
-        "UPDATE reports SET sent_at=? WHERE id=?",
-        (datetime.utcnow().isoformat(), report_id),
+        "INSERT INTO view_snapshots (video_id, views, captured_at) VALUES (?,?,?)",
+        (video_id, views, datetime.utcnow().isoformat()),
     )
+    conn.commit()
+    conn.close()
+
+
+def get_recent_velocity(video_id: str, window_hours: float = 3.0) -> int | None:
+    """Views gained in the last window_hours based on stored snapshots."""
+    conn = get_conn()
+    c = conn.cursor()
+    since = (datetime.utcnow() - timedelta(hours=window_hours)).isoformat()
+    c.execute(
+        "SELECT views FROM view_snapshots WHERE video_id=? ORDER BY captured_at DESC LIMIT 1",
+        (video_id,),
+    )
+    latest = c.fetchone()
+    c.execute(
+        "SELECT views FROM view_snapshots WHERE video_id=? AND captured_at >= ? ORDER BY captured_at ASC LIMIT 1",
+        (video_id, since),
+    )
+    oldest = c.fetchone()
+    conn.close()
+    if latest and oldest:
+        return latest[0] - oldest[0]
+    return None
+
+
+def cleanup_snapshots(keep_hours: int = 48):
+    conn = get_conn()
+    c = conn.cursor()
+    cutoff = (datetime.utcnow() - timedelta(hours=keep_hours)).isoformat()
+    c.execute("DELETE FROM view_snapshots WHERE captured_at < ?", (cutoff,))
+    conn.commit()
+    conn.close()
+
+
+# ── 24h prediction ───────────────────────────────────────────────────────────
+
+def get_24h_prediction(video_id: str, report_hours: float, current_views: int) -> tuple | None:
+    """
+    Predict 24h views using historical ratio from completed videos.
+    Returns (predicted_views, sample_count) or None if not enough data.
+    """
+    if current_views <= 0:
+        return None
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT r1.views, r2.views
+        FROM reports r1
+        JOIN reports r2 ON r1.video_id = r2.video_id
+        WHERE r1.report_hours = ? AND r1.stats_at IS NOT NULL AND r1.views > 0
+          AND r2.report_hours = 24  AND r2.stats_at IS NOT NULL
+          AND r1.video_id != ?
+        ORDER BY r2.scheduled_at DESC
+        LIMIT 15
+        """,
+        (report_hours, video_id),
+    )
+    rows = c.fetchall()
+    conn.close()
+    if len(rows) < 3:
+        return None
+    ratios = [r[1] / r[0] for r in rows if r[0] > 0]
+    avg_ratio = sum(ratios) / len(ratios)
+    return int(current_views * avg_ratio), len(rows)
+
+
+# ── Revival detection ────────────────────────────────────────────────────────
+
+def get_revival_candidates(days_min: int = 7, days_max: int = 90) -> list[dict]:
+    """Videos old enough to check for sudden traffic spikes."""
+    conn = get_conn()
+    c = conn.cursor()
+    now = datetime.utcnow()
+    min_pub = (now - timedelta(days=days_max)).isoformat()
+    max_pub = (now - timedelta(days=days_min)).isoformat()
+    c.execute(
+        """
+        SELECT v.video_id, v.title, v.url, v.thumbnail_url, r.views AS views_24h
+        FROM videos v
+        JOIN reports r ON v.video_id = r.video_id AND r.report_hours = 24 AND r.stats_at IS NOT NULL
+        WHERE v.published_at BETWEEN ? AND ?
+        """,
+        (min_pub, max_pub),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [
+        {"video_id": r[0], "title": r[1], "url": r[2], "thumbnail_url": r[3], "views_24h": r[4]}
+        for r in rows
+    ]
+
+
+# ── Weekly analysis ──────────────────────────────────────────────────────────
+
+def get_videos_for_analysis(limit: int = 20) -> list[dict]:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT v.title, r.views, r.likes, r.comments
+        FROM videos v
+        JOIN reports r ON v.video_id = r.video_id AND r.report_hours = 24 AND r.stats_at IS NOT NULL
+        ORDER BY v.published_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [{"title": r[0], "views": r[1], "likes": r[2], "comments": r[3]} for r in rows]
+
+
+# ── Metadata (key-value store) ───────────────────────────────────────────────
+
+def get_metadata(key: str) -> str | None:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT value FROM metadata WHERE key=?", (key,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def set_metadata(key: str, value: str):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?,?)", (key, value))
     conn.commit()
     conn.close()
 
@@ -174,7 +317,6 @@ def mark_slack_sent(report_id: int):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def get_previous_report_stats(video_id: str, report_hours: float) -> dict | None:
-    """Return stats from the most recent earlier mark that already has data."""
     conn = get_conn()
     c = conn.cursor()
     c.execute(
@@ -193,7 +335,6 @@ def get_previous_report_stats(video_id: str, report_hours: float) -> dict | None
 
 
 def get_benchmark_stats(current_video_id: str, report_hours: float, limit: int = 10) -> list[dict]:
-    """Stats of the last `limit` OTHER videos at the same time mark (data collected)."""
     conn = get_conn()
     c = conn.cursor()
     c.execute(

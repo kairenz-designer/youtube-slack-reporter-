@@ -9,12 +9,10 @@ SLACK_CHANNEL   = os.environ["SLACK_CHANNEL"]
 
 _client = WebClient(token=SLACK_BOT_TOKEN)
 
-HOUR_LABELS = {1: "1 gi\u1edd", 3: "3 gi\u1edd", 6: "6 gi\u1edd", 24: "24 gi\u1edd"}
+HOUR_LABELS = {1: "1 giờ", 3: "3 giờ", 6: "6 giờ", 24: "24 giờ"}
 
-# Achievement rate thresholds
-THRESHOLD_GREEN  = 100   # >= 100% → 🟢
-THRESHOLD_YELLOW = 70    # >= 70%  → 🟡
-                         # <  70%  → 🔴
+THRESHOLD_GREEN  = 100
+THRESHOLD_YELLOW = 70
 
 
 def _diff(current: int, previous: int | None) -> str:
@@ -30,10 +28,10 @@ def _diff(current: int, previous: int | None) -> str:
 
 def _achievement_indicator(rate: float) -> str:
     if rate >= THRESHOLD_GREEN:
-        return "\U0001f7e2"   # 🟢
+        return "\U0001f7e2"
     if rate >= THRESHOLD_YELLOW:
-        return "\U0001f7e1"   # 🟡
-    return "\U0001f534"       # 🔴
+        return "\U0001f7e1"
+    return "\U0001f534"
 
 
 def _thumbnail_url(video_id: str) -> str:
@@ -43,61 +41,54 @@ def _thumbnail_url(video_id: str) -> str:
 def send_report(
     video: dict,
     stats: dict,
-    report_hours: int,
+    report_hours: float,
     previous_stats: dict | None = None,
     benchmark: list[dict] | None = None,
+    predicted_24h: tuple | None = None,
+    comment_summary: str | None = None,
 ):
-    label = HOUR_LABELS.get(report_hours, f"{report_hours} gi\u1edd")
+    label = HOUR_LABELS.get(report_hours, f"{report_hours} giờ")
     prev  = previous_stats or {}
 
     views_str    = f"{stats['views']:,}{_diff(stats['views'],    prev.get('views'))}"
     likes_str    = f"{stats['likes']:,}{_diff(stats['likes'],    prev.get('likes'))}"
     comments_str = f"{stats['comments']:,}{_diff(stats['comments'], prev.get('comments'))}"
 
-    # --- Benchmark calculation ---
     avg_views        = None
     achievement_rate = None
     if benchmark and len(benchmark) >= 3:
         avg_views        = int(sum(b["views"] for b in benchmark) / len(benchmark))
         achievement_rate = round(stats["views"] / avg_views * 100) if avg_views > 0 else None
 
-    # --- Build blocks ---
     blocks = [
-        # Header
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"\U0001f4ca Upload {label} \u2013 Hi\u1ec7u su\u1ea5t video",
+                "text": f"📊 Upload {label} – Hiệu suất video",
                 "emoji": True,
             },
         },
-        # Thumbnail image
         {
             "type": "image",
             "image_url": _thumbnail_url(video["video_id"]),
             "alt_text": video["title"],
         },
-        # Video title link
         {
             "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*<{video['url']}|{video['title']}>*",
-            },
+            "text": {"type": "mrkdwn", "text": f"*<{video['url']}|{video['title']}>*"},
         },
-        # Core stats
         {
             "type": "section",
             "fields": [
-                {"type": "mrkdwn", "text": f"*L\u01b0\u1ee3t xem*\n{views_str}"},
-                {"type": "mrkdwn", "text": f"*L\u01b0\u1ee3t th\xedch*\n{likes_str}"},
-                {"type": "mrkdwn", "text": f"*B\xecnh lu\u1eadn*\n{comments_str}"},
+                {"type": "mrkdwn", "text": f"*Lượt xem*\n{views_str}"},
+                {"type": "mrkdwn", "text": f"*Lượt thích*\n{likes_str}"},
+                {"type": "mrkdwn", "text": f"*Bình luận*\n{comments_str}"},
             ],
         },
     ]
 
-    # Benchmark block
+    # Benchmark
     if avg_views is not None and achievement_rate is not None:
         indicator = _achievement_indicator(achievement_rate)
         blocks.append({"type": "divider"})
@@ -106,27 +97,44 @@ def send_report(
             "fields": [
                 {
                     "type": "mrkdwn",
-                    "text": (
-                        f"*Trung b\xecnh {len(benchmark)} video g\u1ea7n nh\u1ea5t ({label})*\n"
-                        f"{avg_views:,} l\u01b0\u1ee3t xem"
-                    ),
+                    "text": f"*Trung bình {len(benchmark)} video gần nhất ({label})*\n{avg_views:,} lượt xem",
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*\u0110\u1ea1t \u0111\u01b0\u1ee3c*\n{achievement_rate}% {indicator}",
+                    "text": f"*Đạt được*\n{achievement_rate}% {indicator}",
                 },
             ],
         })
     elif benchmark is not None and len(benchmark) < 3:
         blocks.append({
             "type": "context",
-            "elements": [{
-                "type": "mrkdwn",
-                "text": f"\u2139\ufe0f Ch\u01b0a \u0111\u1ee7 d\u1eef li\u1ec7u \u0111\u1ec3 so s\xe1nh ({len(benchmark)}/3 video).",
-            }],
+            "elements": [{"type": "mrkdwn", "text": f"ℹ️ Chưa đủ dữ liệu để so sánh ({len(benchmark)}/3 video)."}],
         })
 
-    # AI-powered tip (falls back to static tip if API unavailable)
+    # 24h prediction (chỉ hiện ở report trước 24h)
+    if predicted_24h is not None:
+        pred_views, sample_count = predicted_24h
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"🔮 *Dự báo 24h:* ~{pred_views:,} lượt xem _(dựa trên {sample_count} video lịch sử)_",
+            },
+        })
+
+    # Comment summary (chỉ hiện ở report 24h)
+    if comment_summary:
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"💬 *Phản hồi khán giả:*\n{comment_summary}",
+            },
+        })
+
+    # AI tip
     ai_tip = get_ai_tip(
         title=video["title"],
         report_hours=report_hours,
@@ -138,14 +146,14 @@ def send_report(
         prev_views=prev.get("views") if prev else None,
     )
     if ai_tip:
-        tip_text = f"\U0001f4a1 {ai_tip}"
+        tip_text = f"💡 {ai_tip}"
     elif achievement_rate is not None:
         if achievement_rate >= THRESHOLD_GREEN:
-            tip_text = "\U0001f4a1 Video \u0111ang hi\u1ec7u su\u1ea5t t\u1ed1t! Ti\u1ebfp t\u1ee5c duy tr\xec thumbnail v\xe0 ti\xeau \u0111\u1ec1 theo h\u01b0\u1edbng n\xe0y."
+            tip_text = "💡 Video đang hiệu suất tốt! Tiếp tục duy trì thumbnail và tiêu đề theo hướng này."
         elif achievement_rate >= THRESHOLD_YELLOW:
-            tip_text = "\U0001f4a1 Hi\u1ec7u su\u1ea5t \u1edf m\u1ee9c trung b\xecnh. Theo d\xf5i th\xeam \u1edf m\u1ed1c ti\u1ebfp theo."
+            tip_text = "💡 Hiệu suất ở mức trung bình. Theo dõi thêm ở mốc tiếp theo."
         else:
-            tip_text = "\U0001f4a1 L\u01b0\u1ee3t xem \u0111ang th\u1ea5p h\u01a1n trung b\xecnh k\xeanh. H\xe3y xem x\xe9t thay \u0111\u1ed5i thumbnail ho\u1eb7c ti\xeau \u0111\u1ec1."
+            tip_text = "💡 Lượt xem đang thấp hơn trung bình kênh. Hãy xem xét thay đổi thumbnail hoặc tiêu đề."
     else:
         tip_text = None
     if tip_text:
@@ -156,16 +164,14 @@ def send_report(
 
     blocks.append({
         "type": "context",
-        "elements": [
-            {"type": "mrkdwn", "text": f"\U0001f517 <{video['url']}|Xem tr\xean YouTube>"}
-        ],
+        "elements": [{"type": "mrkdwn", "text": f"🔗 <{video['url']}|Xem trên YouTube>"}],
     })
 
     try:
         _client.chat_postMessage(
             channel=SLACK_CHANNEL,
             blocks=blocks,
-            text=f"Bao cao video sau {report_hours}h: {video['title']}",
+            text=f"Báo cáo video sau {report_hours}h: {video['title']}",
             unfurl_links=False,
             unfurl_media=False,
         )
@@ -173,3 +179,74 @@ def send_report(
     except SlackApiError as e:
         print(f"[Slack] Error: {e.response['error']}", file=sys.stderr)
         raise
+
+
+def send_revival_alert(video: dict, current_views: int, velocity_3h: int, baseline_3h: int):
+    blocks = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": "🔥 Video đang hồi sinh!", "emoji": True},
+        },
+        {
+            "type": "image",
+            "image_url": _thumbnail_url(video["video_id"]),
+            "alt_text": video["title"],
+        },
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*<{video['url']}|{video['title']}>*"},
+        },
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Tăng trong 3h qua*\n+{velocity_3h:,} lượt xem"},
+                {"type": "mrkdwn", "text": f"*Baseline bình thường (3h)*\n~{baseline_3h:,} lượt xem"},
+            ],
+        },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"Tổng hiện tại: {current_views:,} · 🔗 <{video['url']}|Xem trên YouTube>"}],
+        },
+    ]
+    try:
+        _client.chat_postMessage(
+            channel=SLACK_CHANNEL,
+            blocks=blocks,
+            text=f"🔥 Video hồi sinh: {video['title']}",
+            unfurl_links=False,
+            unfurl_media=False,
+        )
+        print(f"[Slack] Revival alert: {video['video_id']}", file=sys.stderr)
+    except SlackApiError as e:
+        print(f"[Slack] Revival alert error: {e.response['error']}", file=sys.stderr)
+
+
+def send_weekly_analysis(analysis_text: str, video_count: int):
+    from datetime import datetime
+    week = datetime.utcnow().strftime("tuần %d/%m/%Y")
+    blocks = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"📋 Phân tích title — {week}", "emoji": True},
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": analysis_text},
+        },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"_Phân tích từ {video_count} video gần nhất có đủ dữ liệu 24h_"}],
+        },
+    ]
+    try:
+        _client.chat_postMessage(
+            channel=SLACK_CHANNEL,
+            blocks=blocks,
+            text=f"Phân tích title hàng tuần ({video_count} video)",
+            unfurl_links=False,
+            unfurl_media=False,
+        )
+        print("[Slack] Sent weekly analysis", file=sys.stderr)
+    except SlackApiError as e:
+        print(f"[Slack] Weekly analysis error: {e.response['error']}", file=sys.stderr)

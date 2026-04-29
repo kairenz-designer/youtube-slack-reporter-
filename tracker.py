@@ -148,18 +148,59 @@ from db import (
     get_reports_needing_stats, save_stats,
     get_reports_ready_to_send, mark_slack_sent,
     get_previous_report_stats, get_benchmark_stats,
+    save_snapshot, get_recent_velocity, cleanup_snapshots,
+    get_revival_candidates, get_24h_prediction,
+    get_videos_for_analysis, get_metadata, set_metadata,
     REPORT_HOURS,
 )
-from slack_notify import send_report
+from slack_notify import send_report, send_revival_alert, send_weekly_analysis
+from ai_advisor import get_comment_summary, get_title_analysis
 
 LOOKBACK_HOURS = 168
 
 init_db()
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def batch_get_video_stats(video_ids: list) -> dict:
+    """Fetch stats for up to 50 videos in one API call."""
+    if not video_ids:
+        return {}
+    resp = _yt_client().videos().list(
+        part="statistics", id=",".join(video_ids[:50])
+    ).execute()
+    result = {}
+    for item in resp.get("items", []):
+        s = item["statistics"]
+        result[item["id"]] = {
+            "views":    int(s.get("viewCount",   0)),
+            "likes":    int(s.get("likeCount",   0)),
+            "comments": int(s.get("commentCount", 0)),
+        }
+    return result
+
+
+def get_video_comments(video_id: str, max_results: int = 50) -> list[dict]:
+    try:
+        resp = _yt_client().commentThreads().list(
+            part="snippet", videoId=video_id,
+            order="relevance", maxResults=max_results,
+        ).execute()
+        return [
+            {
+                "author": i["snippet"]["topLevelComment"]["snippet"]["authorDisplayName"],
+                "text":   i["snippet"]["topLevelComment"]["snippet"]["textDisplay"],
+                "likes":  int(i["snippet"]["topLevelComment"]["snippet"].get("likeCount", 0)),
+            }
+            for i in resp.get("items", [])
+        ]
+    except Exception as e:
+        print(f"[Comments] {video_id}: {e}", file=sys.stderr)
+        return []
+
 # ── Seed benchmark data (one-time) ──────────────────────────────────────────
 
 def seed_benchmark_if_empty():
-    """Seed historical 3h data from YouTube Studio so benchmark works on day one."""
     import sqlite3
     from db import DB_PATH
     conn = sqlite3.connect(DB_PATH)
@@ -210,7 +251,7 @@ try:
 except Exception as e:
     print(f"[Error] fetch videos: {e}")
 
-# ── Phase 1: Collect stats at each due mark (always, regardless of Slack) ───
+# ── Phase 1: Collect stats at each due mark ──────────────────────────────────
 
 due = get_reports_needing_stats()
 print(f"[Stats] {len(due)} marks due for collection")
@@ -219,11 +260,12 @@ for report in due:
         stats = get_video_stats(report["video_id"])
         if stats:
             save_stats(report["id"], stats["views"], stats["likes"], stats["comments"])
+            save_snapshot(report["video_id"], stats["views"])
             print(f"[Stats] {report['report_hours']}h saved: {report['video_id']}")
     except Exception as e:
         print(f"[Error] stats {report['video_id']}: {e}")
 
-# ── Phase 2: Send Slack report using stored stats ────────────────────────────
+# ── Phase 2: Send Slack reports using stored stats ───────────────────────────
 
 to_send = get_reports_ready_to_send()
 print(f"[Reports] {len(to_send)} ready to send")
@@ -238,9 +280,75 @@ for report in to_send:
             "url":           report["url"],
             "thumbnail_url": report["thumbnail_url"],
         }
-        send_report(video, stats, report["report_hours"], previous_stats, benchmark)
+
+        # 24h prediction (chỉ cho mốc < 24h)
+        predicted_24h = None
+        if report["report_hours"] < 24:
+            predicted_24h = get_24h_prediction(
+                report["video_id"], report["report_hours"], report["views"]
+            )
+
+        # Comment summary (chỉ cho mốc 24h)
+        comment_summary = None
+        if report["report_hours"] == 24:
+            comments = get_video_comments(report["video_id"])
+            if comments:
+                comment_summary = get_comment_summary(report["title"], comments)
+
+        send_report(video, stats, report["report_hours"], previous_stats, benchmark,
+                    predicted_24h=predicted_24h, comment_summary=comment_summary)
         mark_slack_sent(report["id"])
     except Exception as e:
         print(f"[Error] send {report['video_id']}: {e}")
+
+# ── Revival check: batch poll old videos for sudden spikes ───────────────────
+
+revival_candidates = get_revival_candidates()
+if revival_candidates:
+    current = batch_get_video_stats([v["video_id"] for v in revival_candidates])
+    for video in revival_candidates:
+        curr = current.get(video["video_id"])
+        if not curr:
+            continue
+        save_snapshot(video["video_id"], curr["views"])
+        velocity_3h = get_recent_velocity(video["video_id"], window_hours=3)
+        if velocity_3h is None or video["views_24h"] <= 0:
+            continue
+        baseline_3h = int(video["views_24h"] / 24 * 3)  # expected views in 3h at day-1 rate
+        if baseline_3h > 0 and velocity_3h > baseline_3h * 4:
+            print(f"[Revival] {video['video_id']}: +{velocity_3h} in 3h vs baseline {baseline_3h}")
+            try:
+                send_revival_alert(video, curr["views"], velocity_3h, baseline_3h)
+            except Exception as e:
+                print(f"[Error] revival alert {video['video_id']}: {e}")
+
+# ── Weekly title analysis (mỗi thứ 2, chạy 1 lần/tuần) ─────────────────────
+
+now = datetime.utcnow()
+if now.weekday() == 0:  # Monday
+    last_run = get_metadata("last_weekly_analysis")
+    should_run = True
+    if last_run:
+        try:
+            days_ago = (now - datetime.fromisoformat(last_run)).days
+            if days_ago < 6:
+                should_run = False
+        except Exception:
+            pass
+    if should_run:
+        analysis_videos = get_videos_for_analysis(limit=20)
+        if len(analysis_videos) >= 5:
+            print(f"[Weekly] Running title analysis on {len(analysis_videos)} videos")
+            analysis = get_title_analysis(analysis_videos)
+            if analysis:
+                try:
+                    send_weekly_analysis(analysis, len(analysis_videos))
+                    set_metadata("last_weekly_analysis", now.isoformat())
+                except Exception as e:
+                    print(f"[Error] weekly analysis: {e}")
+
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+
+cleanup_snapshots(keep_hours=48)
 
 print("[Done]")
