@@ -38,14 +38,7 @@ def init_db():
             UNIQUE(video_id, report_hours)
         )
     """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS seen_comments (
-            comment_id TEXT PRIMARY KEY,
-            video_id   TEXT,
-            seen_at    TEXT
-        )
-    """)
-    # Migration: add stats_at for existing DBs that don't have it yet
+# Migration: add stats_at for existing DBs that don't have it yet
     try:
         c.execute("ALTER TABLE reports ADD COLUMN stats_at TEXT")
     except Exception:
