@@ -155,10 +155,6 @@ LOOKBACK_HOURS = 168  # look back 1 week so new videos are always caught
 
 init_db()
 
-if os.environ.get("RESEND_LATEST", "").lower() in ("1", "true", "yes"):
-    vid = force_reschedule_latest(REPORT_HOURS)
-    print(f"[Resend] Reset {REPORT_HOURS}h reports for {vid}")
-
 
 def seed_3h_benchmark_if_empty():
     """
@@ -216,6 +212,11 @@ try:
         schedule_reports(video["video_id"], video["published_at"])
 except Exception as e:
     print(f"[Error] fetch videos: {e}")
+
+# Force-resend for the truly latest video (runs after polling so DB is up to date)
+if os.environ.get("RESEND_LATEST", "").lower() in ("1", "true", "yes"):
+    vid = force_reschedule_latest(REPORT_HOURS)
+    print(f"[Resend] Reset {REPORT_HOURS}h reports for {vid}")
 
 # Send pending reports
 pending = get_pending_reports()
