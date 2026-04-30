@@ -251,6 +251,20 @@ try:
 except Exception as e:
     print(f"[Error] fetch videos: {e}")
 
+# ── Debug: dump DB state ─────────────────────────────────────────────────────
+
+import sqlite3 as _sqlite3
+from db import DB_PATH as _DB_PATH
+_dbg = _sqlite3.connect(_DB_PATH)
+_dbg.row_factory = _sqlite3.Row
+_dc = _dbg.cursor()
+_now_utc = datetime.utcnow().isoformat()
+print(f"[Debug] now={_now_utc}")
+_dc.execute("SELECT v.video_id, v.published_at, r.report_hours, r.scheduled_at, r.stats_at, r.sent_at FROM videos v JOIN reports r ON v.video_id=r.video_id ORDER BY v.published_at DESC, r.report_hours ASC LIMIT 20")
+for _row in _dc.fetchall():
+    print(f"[Debug] {dict(_row)}")
+_dbg.close()
+
 # ── Phase 1: Collect stats at each due mark ──────────────────────────────────
 
 due = get_reports_needing_stats()
