@@ -160,19 +160,6 @@ LOOKBACK_HOURS = 168
 
 init_db()
 
-# ── One-time fix: reset corrupted 24h mark for EuTG1k26jSg ──────────────────
-import sqlite3 as _sqlite3_fix
-from db import DB_PATH as _DB_PATH_fix
-_fc = _sqlite3_fix.connect(_DB_PATH_fix)
-_fc.execute(
-    "UPDATE reports SET stats_at=NULL, sent_at=NULL, scheduled_at='2026-04-30T04:04:23' "
-    "WHERE video_id='EuTG1k26jSg' AND report_hours=24 AND scheduled_at < '2026-04-29T20:00:00'"
-)
-_fc.commit()
-if _fc.total_changes:
-    print(f"[Fix] Reset corrupted 24h mark for EuTG1k26jSg")
-_fc.close()
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def batch_get_video_stats(video_ids: list) -> dict:
