@@ -160,6 +160,19 @@ LOOKBACK_HOURS = 168
 
 init_db()
 
+# ── One-time fix: reset corrupted 24h mark for EuTG1k26jSg ──────────────────
+import sqlite3 as _sqlite3_fix
+from db import DB_PATH as _DB_PATH_fix
+_fc = _sqlite3_fix.connect(_DB_PATH_fix)
+_fc.execute(
+    "UPDATE reports SET stats_at=NULL, sent_at=NULL, scheduled_at='2026-04-30T04:04:23' "
+    "WHERE video_id='EuTG1k26jSg' AND report_hours=24 AND scheduled_at < '2026-04-29T20:00:00'"
+)
+_fc.commit()
+if _fc.total_changes:
+    print(f"[Fix] Reset corrupted 24h mark for EuTG1k26jSg")
+_fc.close()
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def batch_get_video_stats(video_ids: list) -> dict:
@@ -250,20 +263,6 @@ try:
         schedule_reports(video["video_id"], video["published_at"])
 except Exception as e:
     print(f"[Error] fetch videos: {e}")
-
-# ── Debug: dump DB state ─────────────────────────────────────────────────────
-
-import sqlite3 as _sqlite3
-from db import DB_PATH as _DB_PATH
-_dbg = _sqlite3.connect(_DB_PATH)
-_dbg.row_factory = _sqlite3.Row
-_dc = _dbg.cursor()
-_now_utc = datetime.utcnow().isoformat()
-print(f"[Debug] now={_now_utc}")
-_dc.execute("SELECT v.video_id, v.published_at, r.report_hours, r.scheduled_at, r.stats_at, r.sent_at FROM videos v JOIN reports r ON v.video_id=r.video_id ORDER BY v.published_at DESC, r.report_hours ASC LIMIT 20")
-for _row in _dc.fetchall():
-    print(f"[Debug] {dict(_row)}")
-_dbg.close()
 
 # ── Phase 1: Collect stats at each due mark ──────────────────────────────────
 
