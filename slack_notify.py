@@ -56,7 +56,7 @@ def send_report(
 
     avg_views        = None
     achievement_rate = None
-    if benchmark and len(benchmark) >= 3:
+    if benchmark and len(benchmark) >= 2:
         avg_views        = int(sum(b["views"] for b in benchmark) / len(benchmark))
         achievement_rate = round(stats["views"] / avg_views * 100) if avg_views > 0 else None
 
@@ -105,10 +105,10 @@ def send_report(
                 },
             ],
         })
-    elif benchmark is not None and len(benchmark) < 3:
+    elif benchmark is not None and len(benchmark) < 2:
         blocks.append({
             "type": "context",
-            "elements": [{"type": "mrkdwn", "text": f"ℹ️ Chưa đủ dữ liệu để so sánh ({len(benchmark)}/3 video)."}],
+            "elements": [{"type": "mrkdwn", "text": f"ℹ️ Chưa đủ dữ liệu để so sánh ({len(benchmark)}/2 video)."}],
         })
 
     # 24h prediction (chỉ hiện ở report trước 24h)
