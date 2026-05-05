@@ -130,7 +130,7 @@ def send_report(
         comments=stats["comments"],
         achievement_rate=achievement_rate,
         avg_views=avg_views,
-        prev_views=prev.get("views") if prev else None,
+        prev_views=None,
     )
     if ai_tip:
         tip_text = f"💡 {ai_tip}"
