@@ -15,17 +15,6 @@ THRESHOLD_GREEN  = 100
 THRESHOLD_YELLOW = 70
 
 
-def _diff(current: int, previous: int | None) -> str:
-    if previous is None:
-        return ""
-    delta = current - previous
-    if delta > 0:
-        return f" _(+{delta:,})_"
-    if delta < 0:
-        return f" _({delta:,})_"
-    return " _(+0)_"
-
-
 def _achievement_indicator(rate: float) -> str:
     if rate >= THRESHOLD_GREEN:
         return "\U0001f7e2"
@@ -42,17 +31,15 @@ def send_report(
     video: dict,
     stats: dict,
     report_hours: float,
-    previous_stats: dict | None = None,
     benchmark: list[dict] | None = None,
     predicted_24h: tuple | None = None,
     comment_summary: str | None = None,
 ):
     label = HOUR_LABELS.get(report_hours, f"{report_hours} giờ")
-    prev  = previous_stats or {}
 
-    views_str    = f"{stats['views']:,}{_diff(stats['views'],    prev.get('views'))}"
-    likes_str    = f"{stats['likes']:,}{_diff(stats['likes'],    prev.get('likes'))}"
-    comments_str = f"{stats['comments']:,}{_diff(stats['comments'], prev.get('comments'))}"
+    views_str    = f"{stats['views']:,}"
+    likes_str    = f"{stats['likes']:,}"
+    comments_str = f"{stats['comments']:,}"
 
     avg_views        = None
     achievement_rate = None

@@ -5,6 +5,7 @@ One run cycle: write credentials → seed data → poll new videos → send due 
 import os
 import sys
 import json
+import re
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -83,6 +84,26 @@ def get_video_stats(video_id: str) -> dict | None:
     }
 
 
+def _parse_duration_seconds(duration: str) -> int:
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", duration)
+    if not m:
+        return 0
+    return int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + int(m.group(3) or 0)
+
+
+def get_video_is_short(video_id: str) -> bool:
+    try:
+        resp = _yt_client().videos().list(part="contentDetails", id=video_id).execute()
+        items = resp.get("items", [])
+        if not items:
+            return False
+        duration = items[0]["contentDetails"]["duration"]
+        return _parse_duration_seconds(duration) <= 180
+    except Exception as e:
+        print(f"[Short] check failed {video_id}: {e}", file=sys.stderr)
+        return False
+
+
 # ── YouTube Analytics API ───────────────────────────────────────────────────
 
 from google.auth.transport.requests import Request
@@ -147,7 +168,7 @@ from db import (
     init_db, is_video_known, add_video, schedule_reports,
     get_reports_needing_stats, save_stats,
     get_reports_ready_to_send, mark_slack_sent,
-    get_previous_report_stats, get_benchmark_stats,
+    get_benchmark_stats,
     save_snapshot, get_recent_velocity, cleanup_snapshots,
     get_revival_candidates, get_24h_prediction,
     get_videos_for_analysis, get_metadata, set_metadata,
@@ -226,6 +247,11 @@ def seed_benchmark_if_empty():
         pub = datetime.fromisoformat(pub_str)
         scheduled = (pub + timedelta(hours=3)).isoformat()
         c.execute(
+            "INSERT OR IGNORE INTO videos (video_id, title, url, thumbnail_url, published_at, is_short) "
+            "VALUES (?,?,?,?,?,?)",
+            (vid, "", f"https://www.youtube.com/watch?v={vid}", "", pub_str, 0),
+        )
+        c.execute(
             "INSERT OR IGNORE INTO reports "
             "(video_id, report_hours, scheduled_at, stats_at, sent_at, views, likes, comments) "
             "VALUES (?,?,?,?,?,?,?,?)",
@@ -244,9 +270,10 @@ try:
     videos = get_recent_videos(published_after)
     for video in videos:
         if not is_video_known(video["video_id"]):
-            print(f"[New] {video['title']}")
+            is_short = get_video_is_short(video["video_id"])
+            print(f"[New] {'[Short] ' if is_short else ''}{video['title']}")
             add_video(video["video_id"], video["title"], video["url"],
-                      video["thumbnail_url"], video["published_at"])
+                      video["thumbnail_url"], video["published_at"], is_short=is_short)
         schedule_reports(video["video_id"], video["published_at"])
 except Exception as e:
     print(f"[Error] fetch videos: {e}")
@@ -272,8 +299,7 @@ print(f"[Reports] {len(to_send)} ready to send")
 for report in to_send:
     try:
         stats = {"views": report["views"], "likes": report["likes"], "comments": report["comments"]}
-        previous_stats = get_previous_report_stats(report["video_id"], report["report_hours"])
-        benchmark      = get_benchmark_stats(report["video_id"], report["report_hours"], limit=10)
+        benchmark = get_benchmark_stats(report["video_id"], report["report_hours"], limit=10)
         video = {
             "video_id":      report["video_id"],
             "title":         report["title"],
@@ -295,7 +321,7 @@ for report in to_send:
             if comments:
                 comment_summary = get_comment_summary(report["title"], comments)
 
-        send_report(video, stats, report["report_hours"], previous_stats, benchmark,
+        send_report(video, stats, report["report_hours"], benchmark,
                     predicted_24h=predicted_24h, comment_summary=comment_summary)
         mark_slack_sent(report["id"])
     except Exception as e:

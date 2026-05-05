@@ -20,7 +20,8 @@ def init_db():
             title         TEXT,
             url           TEXT,
             thumbnail_url TEXT,
-            published_at  TEXT
+            published_at  TEXT,
+            is_short      INTEGER DEFAULT 0
         )
     """)
     c.execute("""
@@ -56,6 +57,10 @@ def init_db():
         c.execute("ALTER TABLE reports ADD COLUMN stats_at TEXT")
     except Exception:
         pass
+    try:
+        c.execute("ALTER TABLE videos ADD COLUMN is_short INTEGER DEFAULT 0")
+    except Exception:
+        pass
     c.execute(
         "UPDATE reports SET stats_at = sent_at WHERE sent_at IS NOT NULL AND stats_at IS NULL"
     )
@@ -72,12 +77,12 @@ def is_video_known(video_id: str) -> bool:
     return result is not None
 
 
-def add_video(video_id: str, title: str, url: str, thumbnail_url: str, published_at: str):
+def add_video(video_id: str, title: str, url: str, thumbnail_url: str, published_at: str, is_short: bool = False):
     conn = get_conn()
     c = conn.cursor()
     c.execute(
-        "INSERT OR IGNORE INTO videos (video_id, title, url, thumbnail_url, published_at) VALUES (?, ?, ?, ?, ?)",
-        (video_id, title, url, thumbnail_url, published_at),
+        "INSERT OR IGNORE INTO videos (video_id, title, url, thumbnail_url, published_at, is_short) VALUES (?, ?, ?, ?, ?, ?)",
+        (video_id, title, url, thumbnail_url, published_at, int(is_short)),
     )
     conn.commit()
     conn.close()
@@ -337,6 +342,9 @@ def get_previous_report_stats(video_id: str, report_hours: float) -> dict | None
 def get_benchmark_stats(current_video_id: str, report_hours: float, limit: int = 10) -> list[dict]:
     conn = get_conn()
     c = conn.cursor()
+    c.execute("SELECT is_short FROM videos WHERE video_id = ?", (current_video_id,))
+    row = c.fetchone()
+    is_short = row[0] if row else 0
     c.execute(
         """
         SELECT r.video_id, v.title, r.views, r.likes, r.comments
@@ -346,10 +354,11 @@ def get_benchmark_stats(current_video_id: str, report_hours: float, limit: int =
           AND r.stats_at IS NOT NULL
           AND r.views IS NOT NULL
           AND r.video_id != ?
+          AND v.is_short = ?
         ORDER BY v.published_at DESC
         LIMIT ?
         """,
-        (report_hours, current_video_id, limit),
+        (report_hours, current_video_id, is_short, limit),
     )
     rows = c.fetchall()
     conn.close()
