@@ -172,6 +172,7 @@ from db import (
     save_snapshot, get_recent_velocity, cleanup_snapshots,
     get_revival_candidates, get_24h_prediction,
     get_videos_for_analysis, get_metadata, set_metadata,
+    save_thread_ts, get_thread_ts,
     REPORT_HOURS,
 )
 from slack_notify import send_report, send_revival_alert, send_weekly_analysis
@@ -321,9 +322,16 @@ for report in to_send:
             if comments:
                 comment_summary = get_comment_summary(report["title"], comments)
 
-        send_report(video, stats, report["report_hours"], benchmark,
-                    predicted_24h=predicted_24h, comment_summary=comment_summary)
+        thread_ts = get_thread_ts(report["video_id"])
+        is_anchor = (report["report_hours"] == 1) or (thread_ts is None)
+
+        msg_ts = send_report(video, stats, report["report_hours"], benchmark,
+                    predicted_24h=predicted_24h, comment_summary=comment_summary,
+                    thread_ts=None if is_anchor else thread_ts)
         mark_slack_sent(report["id"])
+
+        if is_anchor and msg_ts:
+            save_thread_ts(report["video_id"], msg_ts)
     except Exception as e:
         print(f"[Error] send {report['video_id']}: {e}")
 

@@ -61,6 +61,10 @@ def init_db():
         c.execute("ALTER TABLE videos ADD COLUMN is_short INTEGER DEFAULT 0")
     except Exception:
         pass
+    try:
+        c.execute("ALTER TABLE videos ADD COLUMN slack_thread_ts TEXT")
+    except Exception:
+        pass
     c.execute(
         "UPDATE reports SET stats_at = sent_at WHERE sent_at IS NOT NULL AND stats_at IS NULL"
     )
@@ -317,6 +321,25 @@ def set_metadata(key: str, value: str):
     c.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?,?)", (key, value))
     conn.commit()
     conn.close()
+
+
+# ── Thread tracking ─────────────────────────────────────────────────────────
+
+def save_thread_ts(video_id: str, thread_ts: str):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE videos SET slack_thread_ts=? WHERE video_id=?", (thread_ts, video_id))
+    conn.commit()
+    conn.close()
+
+
+def get_thread_ts(video_id: str) -> str | None:
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT slack_thread_ts FROM videos WHERE video_id=?", (video_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

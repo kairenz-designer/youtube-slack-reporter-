@@ -34,7 +34,8 @@ def send_report(
     benchmark: list[dict] | None = None,
     predicted_24h: tuple | None = None,
     comment_summary: str | None = None,
-):
+    thread_ts: str | None = None,
+) -> str | None:
     label = HOUR_LABELS.get(report_hours, f"{report_hours} giờ")
 
     views_str    = f"{stats['views']:,}"
@@ -155,14 +156,18 @@ def send_report(
     })
 
     try:
-        _client.chat_postMessage(
+        kwargs = dict(
             channel=SLACK_CHANNEL,
             blocks=blocks,
             text=f"Báo cáo video sau {report_hours}h: {video['title']}",
             unfurl_links=False,
             unfurl_media=False,
         )
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+        resp = _client.chat_postMessage(**kwargs)
         print(f"[Slack] Sent {report_hours}h report: {video['video_id']}", file=sys.stderr)
+        return resp["ts"]
     except SlackApiError as e:
         print(f"[Slack] Error: {e.response['error']}", file=sys.stderr)
         raise
